@@ -2,8 +2,7 @@
 //  StocksUITests.swift
 //  StocksUITests
 //
-//  Created by Mina Magdy on 23/03/2026.
-//
+
 
 import XCTest
 
