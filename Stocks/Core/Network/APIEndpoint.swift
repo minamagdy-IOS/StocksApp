@@ -5,7 +5,7 @@
 
 import Foundation
 
-enum APIEndpoint {
+enum APIEndpoint: Sendable {
     case marketSummary
     case stockDetail(symbol: String)
 
@@ -13,8 +13,11 @@ enum APIEndpoint {
         guard let url = buildURL() else { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
+        request.timeoutInterval = APIConstants.requestTimeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(APIConstants.rapidAPIKey, forHTTPHeaderField: "x-rapidapi-key")
         request.setValue(APIConstants.rapidAPIHost, forHTTPHeaderField: "x-rapidapi-host")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         return request
     }
 

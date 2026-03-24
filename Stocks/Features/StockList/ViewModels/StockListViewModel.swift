@@ -3,6 +3,7 @@
 //  Stocks
 //
 
+import Combine
 import Foundation
 import Observation
 
@@ -24,42 +25,58 @@ final class StockListViewModel {
     }
 
     private let networkService: NetworkService
-    private var refreshTask: Task<Void, Never>?
+    private var fetchCancellable: AnyCancellable?
+    private var refreshTimerCancellable: AnyCancellable?
 
     init(networkService: NetworkService) {
         self.networkService = networkService
     }
 
     func startAutoRefresh() {
-        refreshTask?.cancel()
-        refreshTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.fetchStocks()
-                try? await Task.sleep(for: .seconds(APIConstants.autoRefreshInterval))
+        stopAutoRefresh()
+        fetchStocks()
+        refreshTimerCancellable = Timer.publish(every: APIConstants.autoRefreshInterval, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.fetchStocks()
             }
-        }
     }
 
     func stopAutoRefresh() {
-        refreshTask?.cancel()
-        refreshTask = nil
+        refreshTimerCancellable?.cancel()
+        refreshTimerCancellable = nil
+        fetchCancellable?.cancel()
+        fetchCancellable = nil
     }
 
-    private func fetchStocks() async {
+    private func fetchStocks() {
         isLoading = stocks.isEmpty
         errorMessage = nil
-        defer { isLoading = false }
-        do {
-            let response = try await networkService.fetch(
-                MarketSummaryResponse.self,
-                endpoint: .marketSummary
-            )
-            stocks = response.marketSummaryAndSparkResponse.result
-        } catch NetworkError.cancelled {
-            // Cancellation is expected during refresh/task teardown.
-            return
-        } catch {
-            errorMessage = (error as? NetworkError)?.errorDescription ?? error.localizedDescription
-        }
+        fetchCancellable?.cancel()
+        
+        fetchCancellable = networkService.fetchPublisher(
+            MarketSummaryResponse.self,
+            endpoint: .marketSummary
+        )
+        .receive(on: DispatchQueue.main)
+        .sink(
+            receiveCompletion: { [weak self] completion in
+                guard let self else { return }
+                defer { self.isLoading = false }
+                
+                switch completion {
+                case .finished:
+                    break
+                case .failure(let error):
+                    guard case .cancelled = error else {
+                        self.errorMessage = error.errorDescription ?? error.localizedDescription
+                        return
+                    }
+                }
+            },
+            receiveValue: { [weak self] response in
+                self?.stocks = response.marketSummaryAndSparkResponse.result
+            }
+        )
     }
 }

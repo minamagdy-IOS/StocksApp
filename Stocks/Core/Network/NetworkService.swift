@@ -3,57 +3,107 @@
 //  Stocks
 //
 
+import Combine
 import Foundation
+import OSLog
 
-protocol NetworkService: Sendable {
-    func fetch<T: Decodable>(_ type: T.Type, endpoint: APIEndpoint) async throws -> T
+protocol NetworkService: AnyObject, Sendable {
+    func fetchPublisher<T: Decodable>(
+        _ type: T.Type,
+        endpoint: APIEndpoint
+    ) -> AnyPublisher<T, NetworkError>
 }
 
-actor NetworkServiceImpl: NetworkService {
+/// Thread-safe network service using Combine.
+/// @unchecked Sendable: Safe because URLSession is thread-safe and decoder/logger are immutable after init.
+final class NetworkServiceImpl: NetworkService, @unchecked Sendable {
     private let session: URLSession
+    private let decoder: JSONDecoder
+    private let logger = Logger(subsystem: "com.stocks.app", category: "network")
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, decoder: JSONDecoder? = nil) {
         self.session = session
+        self.decoder = decoder ?? Self.defaultDecoder()
     }
 
-    func fetch<T: Decodable>(_ type: T.Type, endpoint: APIEndpoint) async throws -> T {
+    private static func defaultDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .useDefaultKeys
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return decoder
+    }
+
+    func fetchPublisher<T: Decodable>(
+        _ type: T.Type,
+        endpoint: APIEndpoint
+    ) -> AnyPublisher<T, NetworkError> {
         guard let request = endpoint.urlRequest else {
-            throw NetworkError.invalidURL
+            logger.error("Failed to build URL request for endpoint")
+            return Fail(error: NetworkError.invalidURL).eraseToAnyPublisher()
         }
-        let (data, response) = try await performRequest(request)
-        try validateResponse(response)
-        return try decode(type, from: data)
+
+        let urlString = request.url?.absoluteString ?? "unknown"
+        logger.debug("Requesting: \(urlString, privacy: .public)")
+
+        return session.dataTaskPublisher(for: request)
+            .mapError(mapURLError)
+            .tryMap { [unowned self] data, response -> Data in
+                try self.validateResponse(response, data: data)
+                return data
+            }
+            .tryMap { [unowned self] data -> T in
+                try self.decode(type, from: data)
+            }
+            .mapError(mapPublisherError)
+            .eraseToAnyPublisher()
     }
 
-    private func performRequest(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        do {
-            return try await session.data(for: request)
-        } catch is CancellationError {
-            throw NetworkError.cancelled
-        } catch let error as URLError where error.code == .cancelled {
-            throw NetworkError.cancelled
-        } catch {
-            throw NetworkError.unknown(underlying: error)
+    private func mapPublisherError(_ error: Error) -> NetworkError {
+        error as? NetworkError ?? .unknown(underlying: error)
+    }
+
+    private func mapURLError(_ error: URLError) -> NetworkError {
+        switch error.code {
+        case .cancelled:
+            return .cancelled
+        case .timedOut:
+            return .timeout
+        case .notConnectedToInternet, .networkConnectionLost:
+            return .noConnection
+        default:
+            return .unknown(underlying: error)
         }
     }
 
-    private func validateResponse(_ response: URLResponse) throws {
+    private func validateResponse(_ response: URLResponse, data: Data) throws {
         guard let httpResponse = response as? HTTPURLResponse else {
+            logger.error("Response is not HTTPURLResponse")
             throw NetworkError.unknown(underlying: URLError(.badServerResponse))
         }
+
+        logger.debug("Response status: \(httpResponse.statusCode)")
+
         guard (200...299).contains(httpResponse.statusCode) else {
-            throw NetworkError.requestFailed(statusCode: httpResponse.statusCode)
+            logger.error("Request failed with status \(httpResponse.statusCode)")
+            throw NetworkError.requestFailed(statusCode: httpResponse.statusCode, data: data)
         }
     }
 
     private func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         guard !data.isEmpty else {
+            logger.error("Received empty data")
             throw NetworkError.noData
         }
+
         do {
-            return try JSONDecoder().decode(type, from: data)
+            let decoded = try decoder.decode(type, from: data)
+            let typeName = String(describing: T.self)
+            logger.debug("Successfully decoded \(typeName, privacy: .public)")
+            return decoded
         } catch {
-            throw NetworkError.decodingFailed(underlying: error)
+            let message = error.localizedDescription
+            logger.error("Decoding failed: \(message, privacy: .public)")
+            throw NetworkError.decodingFailed(underlying: error, data: data)
         }
     }
 }

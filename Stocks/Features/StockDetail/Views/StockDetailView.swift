@@ -28,7 +28,7 @@ struct StockDetailView: View {
         }
         .navigationTitle(symbol)
         .navigationBarTitleDisplayMode(.large)
-        .task { await viewModel.fetchDetail() }
+        .task { viewModel.fetchDetail() }
     }
 
     private var loadingView: some View {
