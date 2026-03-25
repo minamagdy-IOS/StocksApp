@@ -26,6 +26,11 @@ struct StockDetailAPIResponse: Decodable {
             quoteSummary = QuoteSummaryPayload(result: [modules], error: nil)
         }
     }
+
+    /// Direct initializer for tests and previews (not used for JSON decoding).
+    init(quoteSummary: QuoteSummaryPayload) {
+        self.quoteSummary = quoteSummary
+    }
 }
 
 struct QuoteSummaryPayload: Decodable {

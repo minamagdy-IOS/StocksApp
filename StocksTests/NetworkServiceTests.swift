@@ -8,26 +8,28 @@ import Foundation
 import Testing
 @testable import Stocks
 
+/// Serialized: `MockURLProtocol.requestHandler` is global and not safe for parallel tests.
+@Suite(.serialized)
 struct NetworkServiceTests {
-    
-    // MARK: - Mock URLSession
-    
+
+    // MARK: - Mock URLProtocol
+
     final class MockURLProtocol: URLProtocol {
         static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data?))?
-        
+
         override class func canInit(with request: URLRequest) -> Bool {
             true
         }
-        
+
         override class func canonicalRequest(for request: URLRequest) -> URLRequest {
             request
         }
-        
+
         override func startLoading() {
             guard let handler = MockURLProtocol.requestHandler else {
                 fatalError("Handler is unavailable.")
             }
-            
+
             do {
                 let (response, data) = try handler(request)
                 client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -39,19 +41,66 @@ struct NetworkServiceTests {
                 client?.urlProtocol(self, didFailWithError: error)
             }
         }
-        
+
         override func stopLoading() {}
     }
-    
+
     private func makeTestSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [MockURLProtocol.self] + (config.protocolClasses ?? [])
         return URLSession(configuration: config)
     }
-    
-    // MARK: - Success Tests
-    
+
+    /// Waits for a single value then `.finished`, or the first failure.
+    private func awaitValue<T: Decodable>(_ publisher: AnyPublisher<T, NetworkError>) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            var cancellable: AnyCancellable?
+            var received: T?
+            cancellable = publisher.sink(
+                receiveCompletion: { completion in
+                    defer { cancellable?.cancel() }
+                    switch completion {
+                    case .finished:
+                        if let received = received {
+                            continuation.resume(returning: received)
+                        } else {
+                            continuation.resume(throwing: NetworkError.noData)
+                        }
+                    case .failure(let error):
+                        continuation.resume(throwing: error)
+                    }
+                },
+                receiveValue: { value in
+                    received = value
+                }
+            )
+        }
+    }
+
+    /// Waits for the first failure (or `nil` if the stream completes successfully).
+    private func awaitFailure<T: Decodable>(_ publisher: AnyPublisher<T, NetworkError>) async -> NetworkError? {
+        await withCheckedContinuation { continuation in
+            var cancellable: AnyCancellable?
+            cancellable = publisher.sink(
+                receiveCompletion: { completion in
+                    defer { cancellable?.cancel() }
+                    switch completion {
+                    case .finished:
+                        continuation.resume(returning: nil)
+                    case .failure(let error):
+                        continuation.resume(returning: error)
+                    }
+                },
+                receiveValue: { _ in }
+            )
+        }
+    }
+
+    // MARK: - Success
+
     @Test func testSuccessfulRequest() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         let testJSON = """
         {
             "marketSummaryAndSparkResponse": {
@@ -70,7 +119,7 @@ struct NetworkServiceTests {
             }
         }
         """
-        
+
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -80,44 +129,21 @@ struct NetworkServiceTests {
             )!
             return (response, testJSON.data(using: .utf8))
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedResult: MarketSummaryResponse?
-        var receivedError: NetworkError?
-        
-        let expectation = XCTestExpectation(description: "Publisher completes")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let result = try await awaitValue(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { response in
-                receivedResult = response
-            }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        #expect(receivedError == nil)
-        #expect(receivedResult != nil)
-        #expect(receivedResult?.marketSummaryAndSparkResponse.result.count == 1)
-        #expect(receivedResult?.marketSummaryAndSparkResponse.result.first?.symbol == "AAPL")
-        
-        cancellable.cancel()
+
+        #expect(result.marketSummaryAndSparkResponse.result.count == 1)
+        #expect(result.marketSummaryAndSparkResponse.result.first?.symbol == "AAPL")
     }
-    
-    // MARK: - HTTP Error Tests
-    
+
+    // MARK: - HTTP errors
+
     @Test func testHTTPError404() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -127,40 +153,23 @@ struct NetworkServiceTests {
             )!
             return (response, nil)
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        #expect(receivedError != nil)
-        if case .requestFailed(let statusCode, _) = receivedError {
+
+        #expect(error != nil)
+        if case .requestFailed(let statusCode, _) = error {
             #expect(statusCode == 404)
         } else {
             Issue.record("Expected requestFailed error")
         }
-        
-        cancellable.cancel()
     }
-    
+
     @Test func testHTTPError500() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -170,47 +179,30 @@ struct NetworkServiceTests {
             )!
             return (response, Data())
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        if case .requestFailed(let statusCode, _) = receivedError {
+
+        if case .requestFailed(let statusCode, _) = error {
             #expect(statusCode == 500)
         } else {
             Issue.record("Expected requestFailed with 500")
         }
-        
-        cancellable.cancel()
     }
-    
-    // MARK: - Decoding Error Tests
-    
+
+    // MARK: - Decoding
+
     @Test func testDecodingFailure() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         let invalidJSON = """
         {
             "invalid": "structure"
         }
         """
-        
+
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -220,39 +212,22 @@ struct NetworkServiceTests {
             )!
             return (response, invalidJSON.data(using: .utf8))
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        if case .decodingFailed(_, let data) = receivedError {
+
+        if case .decodingFailed(_, let data) = error {
             #expect(data != nil)
         } else {
             Issue.record("Expected decodingFailed error")
         }
-        
-        cancellable.cancel()
     }
-    
+
     @Test func testEmptyDataError() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!,
@@ -262,180 +237,75 @@ struct NetworkServiceTests {
             )!
             return (response, Data())
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        if case .noData = receivedError {
-            // Success
+
+        if case .noData = error {
+            // ok
         } else {
             Issue.record("Expected noData error")
         }
-        
-        cancellable.cancel()
     }
-    
-    // MARK: - Network Error Tests
-    
+
+    // MARK: - URLError mapping
+
     @Test func testTimeoutError() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.timedOut)
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        if case .timeout = receivedError {
-            // Success
+
+        if case .timeout = error {
+            // ok
         } else {
             Issue.record("Expected timeout error")
         }
-        
-        cancellable.cancel()
     }
-    
+
     @Test func testNoConnectionError() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.notConnectedToInternet)
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        if case .noConnection = receivedError {
-            // Success
+
+        if case .noConnection = error {
+            // ok
         } else {
             Issue.record("Expected noConnection error")
         }
-        
-        cancellable.cancel()
     }
-    
+
     @Test func testCancelledError() async throws {
+        defer { MockURLProtocol.requestHandler = nil }
+
         MockURLProtocol.requestHandler = { _ in
             throw URLError(.cancelled)
         }
-        
-        let session = makeTestSession()
-        let service = NetworkServiceImpl(session: session)
-        
-        var receivedError: NetworkError?
-        let expectation = XCTestExpectation(description: "Publisher fails")
-        
-        let cancellable = service.fetchPublisher(
-            MarketSummaryResponse.self,
-            endpoint: .marketSummary
+
+        let service = NetworkServiceImpl(session: makeTestSession())
+        let error = await awaitFailure(
+            service.fetchPublisher(MarketSummaryResponse.self, endpoint: .marketSummary)
         )
-        .sink(
-            receiveCompletion: { completion in
-                if case .failure(let error) = completion {
-                    receivedError = error
-                }
-                expectation.fulfill()
-            },
-            receiveValue: { _ in }
-        )
-        
-        await fulfillment(of: [expectation], timeout: 2.0)
-        
-        if case .cancelled = receivedError {
-            // Success
+
+        if case .cancelled = error {
+            // ok
         } else {
             Issue.record("Expected cancelled error")
         }
-        
-        cancellable.cancel()
-    }
-}
-
-// MARK: - XCTestExpectation for Swift Testing
-
-final class XCTestExpectation: @unchecked Sendable {
-    private let description: String
-    private var isFulfilled = false
-    private let lock = NSLock()
-    
-    init(description: String) {
-        self.description = description
-    }
-    
-    func fulfill() {
-        lock.lock()
-        isFulfilled = true
-        lock.unlock()
-    }
-    
-    var fulfilled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return isFulfilled
-    }
-}
-
-func fulfillment(of expectations: [XCTestExpectation], timeout: TimeInterval) async {
-    let deadline = Date().addingTimeInterval(timeout)
-    
-    while Date() < deadline {
-        if expectations.allSatisfy({ $0.fulfilled }) {
-            return
-        }
-        try? await Task.sleep(for: .milliseconds(10))
     }
 }

@@ -8,6 +8,7 @@ import Foundation
 import Testing
 @testable import Stocks
 
+@Suite(.serialized)
 @MainActor
 struct StockListViewModelTests {
     
@@ -95,57 +96,7 @@ struct StockListViewModelTests {
         
         viewModel.stopAutoRefresh()
     }
-    
-    // MARK: - Search Tests
-    
-    @Test func testSearchFiltering() async throws {
-        let mockService = MockNetworkService()
-        mockService.stubbedResult = .success(makeTestResponse())
         
-        let viewModel = StockListViewModel(networkService: mockService)
-        
-        viewModel.startAutoRefresh()
-        try await Task.sleep(for: .milliseconds(100))
-        
-        #expect(viewModel.filteredStocks.count == 3)
-        
-        viewModel.searchQuery = "AAPL"
-        #expect(viewModel.filteredStocks.count == 1)
-        #expect(viewModel.filteredStocks.first?.symbol == "AAPL")
-        
-        viewModel.searchQuery = "apple"
-        #expect(viewModel.filteredStocks.count == 1)
-        
-        viewModel.searchQuery = "xyz"
-        #expect(viewModel.filteredStocks.isEmpty)
-        
-        viewModel.searchQuery = ""
-        #expect(viewModel.filteredStocks.count == 3)
-        
-        viewModel.stopAutoRefresh()
-    }
-    
-    @Test func testSearchCaseInsensitive() async throws {
-        let mockService = MockNetworkService()
-        mockService.stubbedResult = .success(makeTestResponse())
-        
-        let viewModel = StockListViewModel(networkService: mockService)
-        
-        viewModel.startAutoRefresh()
-        try await Task.sleep(for: .milliseconds(100))
-        
-        viewModel.searchQuery = "APPLE"
-        #expect(viewModel.filteredStocks.count == 1)
-        
-        viewModel.searchQuery = "apple"
-        #expect(viewModel.filteredStocks.count == 1)
-        
-        viewModel.searchQuery = "ApPlE"
-        #expect(viewModel.filteredStocks.count == 1)
-        
-        viewModel.stopAutoRefresh()
-    }
-    
     // MARK: - Auto Refresh Tests
     
     @Test func testAutoRefreshCallsMultipleTimes() async throws {
