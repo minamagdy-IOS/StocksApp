@@ -9,12 +9,19 @@ struct StockRowView: View {
     let stock: Stock
 
     var body: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 10) {
+            SparklineView(
+                values: stock.sparkClosePrices,
+                baseline: stock.spark?.previousClose,
+                isPositive: stock.isPositive
+            )
+            .frame(width: 64, height: 36)
+
             symbolInfo
-            Spacer()
+            Spacer(minLength: 8)
             priceInfo
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
     private var symbolInfo: some View {
@@ -39,7 +46,7 @@ struct StockRowView: View {
     }
 
     private var changeBadge: some View {
-        Text(formattedChangePercent)
+        Text(formattedChangeAmount)
             .font(.caption)
             .fontWeight(.semibold)
             .foregroundStyle(.white)
@@ -53,8 +60,8 @@ struct StockRowView: View {
         String(format: "%.2f", stock.price)
     }
 
-    private var formattedChangePercent: String {
-        let sign = stock.isPositive ? "+" : ""
-        return "\(sign)\(String(format: "%.2f", stock.changePercent))%"
+    /// Absolute day change (matches typical watchlist spark rows).
+    private var formattedChangeAmount: String {
+        String(format: "%+.2f", stock.change)
     }
 }

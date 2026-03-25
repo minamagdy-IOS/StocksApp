@@ -26,8 +26,11 @@ struct Stock: Decodable, Identifiable {
     let regularMarketChangePercent: MarketValue?
     let regularMarketPreviousClose: MarketValue?
     let marketState: String?
-
+    let spark: SparkData?
     var id: String { symbol }
+    var sparkClosePrices: [Double] {
+        spark?.close ?? []
+    }
 
     var displayName: String {
         shortName ?? symbol
@@ -38,16 +41,31 @@ struct Stock: Decodable, Identifiable {
     }
 
     var changePercent: Double {
-        regularMarketChangePercent?.raw ?? 0
+        if let pct = regularMarketChangePercent?.raw {
+            return pct
+        }
+        guard let prev = regularMarketPreviousClose?.raw, prev != 0 else { return 0 }
+        return ((price - prev) / prev) * 100
     }
 
     var change: Double {
-        regularMarketChange?.raw ?? 0
+        if let delta = regularMarketChange?.raw {
+            return delta
+        }
+        guard let prev = regularMarketPreviousClose?.raw else { return 0 }
+        return price - prev
     }
 
     var isPositive: Bool {
         changePercent >= 0
     }
+}
+
+// MARK: - Spark (market summary)
+
+struct SparkData: Decodable, Equatable {
+    let close: [Double]?
+    let previousClose: Double?
 }
 
 // MARK: - Market Value

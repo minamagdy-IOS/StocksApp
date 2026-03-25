@@ -7,12 +7,9 @@ import Combine
 import Foundation
 @testable import Stocks
 
-/// Mock network service for tests. Prefer `responseQueue` when a test needs different
-/// payloads per request (e.g. detail then market summary fallback).
+
 final class MockNetworkService: NetworkService, @unchecked Sendable {
-    /// If non-empty, each `fetchPublisher` consumes the next element.
     var responseQueue: [Result<Any, NetworkError>] = []
-    /// Used when `responseQueue` is empty (single-response tests).
     var stubbedResult: Result<Any, NetworkError>?
     private(set) var fetchCallCount = 0
     private(set) var lastEndpoint: APIEndpoint?

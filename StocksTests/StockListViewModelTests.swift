@@ -23,7 +23,8 @@ struct StockListViewModelTests {
             regularMarketChange: MarketValue(raw: 2.5, fmt: "2.50"),
             regularMarketChangePercent: MarketValue(raw: 1.69, fmt: "1.69%"),
             regularMarketPreviousClose: MarketValue(raw: 147.5, fmt: "147.50"),
-            marketState: "REGULAR"
+            marketState: "REGULAR",
+            spark: nil
         )
     }
     
