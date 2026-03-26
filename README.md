@@ -8,6 +8,15 @@
 
 iOS app built with **SwiftUI** that shows a **market summary** list (with intraday **sparklines**) and a **stock detail** screen. Market and quote data come from **[RapidAPI](https://rapidapi.com/)** Yahoo Finance–compatible APIs (`yh-finance.p.rapidapi.com`).
 
+## Architecture
+The app follows a simple layered MVVM style:
+- **View layer (`Views`)**: SwiftUI screens like `StockListView`, `StockRowView`, `SparklineView`, and `StockDetailView`.
+- **State layer (`ViewModels`)**: `@Observable` / `@MainActor` view models (`StockListViewModel`, `StockDetailViewModel`) that own loading, refresh, error, and filtering logic.
+- **Data layer (`Core/Network`)**: `NetworkService` abstraction with a concrete `NetworkServiceImpl` that builds requests from `APIEndpoint` and decodes responses with `Codable`.
+- **Domain models (`Models`)**: `Stock`, `MarketSummaryResponse`, and `StockDetail*` structs map API payloads to UI-friendly computed values.
+**Data flow:** `View` -> `ViewModel` -> `NetworkService` -> API -> decoded `Model` -> published state -> `View`.
+
+
 ## Features
 
 | Area | What you get |
@@ -53,4 +62,4 @@ StocksUITests/   UI tests
 
 ## Tests
 
-Run unit tests in Xcode (**⌘U**) or see `RUN_TESTS.md` / `TESTING_GUIDE.md` if present in the repo.
+Run unit tests in Xcode (**⌘U**) 
