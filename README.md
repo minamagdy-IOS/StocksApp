@@ -1,5 +1,11 @@
 # Stocks
 
+<p align="center">
+  <img src="img1.png" alt="Stocks screenshot 1" width="180" />
+  <img src="img2.png" alt="Stocks screenshot 2" width="180" />
+  <img src="img3.png" alt="Stocks screenshot 3" width="180" />
+</p>
+
 iOS app built with **SwiftUI** that shows a **market summary** list (with intraday **sparklines**) and a **stock detail** screen. Market and quote data come from **[RapidAPI](https://rapidapi.com/)** Yahoo Finance–compatible APIs (`yh-finance.p.rapidapi.com`).
 
 ## Features
