@@ -15,7 +15,7 @@ enum APIConstants {
     
     static var rapidAPIKey: String {
         guard let key = ProcessInfo.processInfo.environment["RAPIDAPI_KEY"] else {
-            return "647d2802a9msh97fe2ab26f3ecbcp1a165cjsnb227259c30f0"
+            return "0c4fce0d32mshe17157162d6097dp1b5756jsn0958cc190c0c"
         }
         return key
     }
